@@ -1,324 +1,293 @@
 import socket
-import sys
 import threading
 import time
 import platform
+import sys
 import os
-
+import subprocess
 port1 = 0
-
-#Thread to interact with Server
-class requestor(threading.Thread):
-	def __init__(self, uport, prob):
+serverHost = '192.168.56.101'
+serverPort = 7734
+class p2s(threading.Thread):
+	def __init__(self, uploadPort, p):
 		threading.Thread.__init__(self)
-		self.uploadPort = uport
-		self.prob = prob
+		self.uploadPort = uploadPort
+		self.p = p
 		self.start()
-		
-	def run(self):
-		#Opens a permanent connection with the server
-		cliSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-		#host = raw_input('Server IP Address = ')
-		host = '127.0.0.1'
-		port = 7734
-		cliSocket.connect((host,port))
-		print('Select an Option Below')
-		print('1. Add Available RFCs Automatically to Server....')
-		print('2. Manually ADD the RFCs Later')
-		RFCAddOption = int(input('Option = '))
-		if RFCAddOption == 1:
-			self.sendRFCListToServer(cliSocket)
-		self.requestServer(cliSocket)	
 	
-	def sendRFCListToServer(self, cliSoc):
-		currRFCList = []
-		for f in os.listdir("."):
-			if f.startswith("RFC"):
-				currRFCList.append(f)
-		print('Sending RFC Information to Server....')
-		for rfc in currRFCList:
-			self.sendRFCAddRequest(cliSoc, 0, rfc)
-	
-	#Forms all the messages to be sent to the server.
-	#Uses the method ADD, LOOKUP and LIST as criteria to generate message
-	def formMessage(self, type, rfcNo):
-		version = 'P2P-CI/1.0'
-		sp = ' '
-		end = '\n'
-		host = 'Host:'+sp+socket.gethostbyname(socket.gethostname())
-		port = 'Port:'+sp+str(self.uploadPort)	
-		method = type
-		sendMsg = ''
-		if type == 'ADD':			
-			RFC = 'RFC'+sp+str(input("RFC Number = "))
-			title = 'Title:'+sp+input("RFC title = ")
-			sendMsg = method+sp+RFC+sp+version+end+host+end+port+end+title+end+end			#PROPER REQUEST
-			
-			#sendMsg = method+sp+RFC+sp+'P2P-CI/2.0'+end+host+end+port+end+title+end+end	#Test for VERSION NOT SUPPORTED
-			#sendMsg = 'REMOVE'+sp+RFC+sp+version+end+host+end+port+end+title+end+end		#Test for BAD REQUEST			
-		elif type == 'LOOKUP':			
-			RFC = 'RFC'+sp+str(input("RFC Number = "))
-			title = 'Title:'+sp+input("RFC title = ")
-			sendMsg = method+sp+RFC+sp+version+end+host+end+port+end+title+end+end
-		elif type == 'GET':
-			RFC = 'RFC'+sp+rfcNo
-			OS = 'OS:'+sp+platform.platform()
-			sendMsg = method+sp+RFC+sp+version+end+host+end+OS+end+end						#PROPER REQUEST
-			
-			#sendMsg = method+sp+RFC+sp+'P2P-CI/2.0'+end+host+end+OS+end+end				#Test for VERSION NOT SUPPORTED
-			#sendMsg = 'PUT'+sp+RFC+sp+version+end+host+end+OS+end+end						#Test for BAD REQUEST
-		elif type == 'CURR_ADD':
-			method = 'ADD'
-			RFC = 'RFC'+sp+rfcNo
-			title = 'Title:'+sp+'RFC'+sp+rfcNo
-			sendMsg = method+sp+RFC+sp+version+end+host+end+port+end+title+end+end			
-		else:
-			sendMsg = method+sp+version+end+host+end+port+end+end		
-		return sendMsg				
-	
-	#Options for Client interface
-	def requestServer(self, cliSoc):	
-		self.flag = 0	
-		while self.flag == 0:
-			print("\n1. Add RFC to Server \n2. Look Up an RFC \n3. Request Whole Index List \n4. Leave the Network")
-			option = str(input("Option = "))
-			if option == '1':
-				self.sendRFCAddRequest(cliSoc, 1, 0)
-			elif option == '2':
-				self.lookUpRequest(cliSoc)
-			elif option == '3':
-				self.wholeIndexRequest(cliSoc)
-			elif option == '4':
-				cliSoc.close()
-				self.flag = 1
+	def mainMenu(self, clientSocket):		
+		while True:
+			print("1. Add RFC \n")
+			print("2. Look Up RFC \n")
+			print("3. List RFC index \n")
+			print("4. Exit network\n")
+			menu_option_selected = str(input("Input = "))
+			if menu_option_selected == '1':
+				self.addRfcToServer(clientSocket, 1, 0, 0)
+			elif menu_option_selected == '2':
+				self.lookUpRfc(clientSocket)
+			elif menu_option_selected == '3':
+				self.listIndexRequest(clientSocket)
+			elif menu_option_selected == '4':
+				clientSocket.close()
+				break
 			else:
 				print("Invalid Selection. Re-enter the Option!!!")
-	
-	#RFC Add Request
-	def sendRFCAddRequest(self, cliSoc, queryType, rfc):
-		if queryType == 0:
-			sendMessage = self.formMessage('CURR_ADD',rfc[3:len(rfc)-4])
+	def parseMessage(self, message):
+		messageLines = message.split("\n")
+		return messageLines	
+				
+	def createPacket(self, request_method, rfcNum, file):
+		hostLine = 'Host:' + ' ' + socket.gethostbyname(socket.gethostname())
+		portLine = 'Port:' + ' ' + str(self.uploadPort)	
+		version = 'P2P-CI/1.0'
+		packet = ''
+		if request_method == 'ADD':		
+			#RFC = file.split(',')[0]
+			title = 'Title:' + file.split(',')[1].split(".")[0]
+			packet = request_method + ' ' + 'RFC' + ' ' + rfcNum + ' ' + version + '\n' + hostLine + '\n' + portLine + '\n' + title +  '\n\n'
+		elif request_method == 'CURR_ADD':
+			RFC = 'RFC' + ' ' + rfcNum
+			title = file.split(",")[1].split(".")[0]
+			title = 'Title:' + title
+			packet = 'ADD' + ' ' + RFC + ' ' + version + '\n' + hostLine + '\n' + portLine + '\n' + title + '\n\n'	 
+		elif request_method == 'LOOKUP':			
+			RFC = 'RFC' + ' ' + str(input("RFC Number = "))
+			title = 'Title:' + raw_input("RFC title = ")
+			packet = request_method + ' ' + RFC + ' ' + version + '\n' + hostLine + '\n' + portLine + '\n' + title + '\n\n'
+		elif request_method == 'GET':
+			RFC = 'RFC' + ' ' + rfcNum
+			OS = 'OS:' + ' ' + platform.platform()
+			packet = request_method + ' ' + RFC + ' ' + version + '\n' + hostLine + '\n' + OS + '\n' + '\n'  # PROPER REQUEST
 		else:
-			sendMessage = self.formMessage('ADD',0)
-		cliSoc.send(bytes(sendMessage.encode('UTF-8')))	
-		data = cliSoc.recv(2048) 
-		decodedData = data.decode('UTF-8')
-		print('\n'+decodedData+'\n')
-		
-		
-	def parseMsg(self, msg):
-		splitMsg = msg.split("\n")
-		return splitMsg
+			packet = request_method + ' ' + version + '\n' + hostLine + '\n' + portLine + '\n\n'	
+		return packet
 	
-	
-	
-	#Lookup Request to the Server
-	def lookUpRequest(self, cliSoc):
-		#Sends a lookup request
-		sendMessage = self.formMessage('LOOKUP',0)
-		cliSoc.send(bytes(sendMessage.encode('UTF-8')))	
-		data = cliSoc.recv(1024) 
-		decodedData = data.decode('UTF-8')
-		peerList = self.parseMsg(decodedData)
-		print('\n'+peerList[0])
-		
-		#if the requested RFC is available in the P2P network then 
-		#all the hosts containing the RFC are listed.
-		if '200 OK' in peerList[0]:			
-			for i in range(1,len(peerList)-1):
-				peerDetails = peerList[i].split('<c>')               #change <c> 
-				print("%d. Host:%s\tPort:%s"%(i,peerDetails[2],peerDetails[3]))
-			print(str(i+1)+". Quit Download Option")
-			option = input("option = ")
-			while int(option) > len(peerList)+1 or int(option) == 0:
-					option = input("Enter Proper option = ") 
-			if int(option) == i+1:
+	def advertiseRfc(self, clientSocket):
+		rfc_list = []
+		for file in os.listdir("."):
+			if file.startswith("RFC") and file.lower().endswith(('.pdf')):
+				rfc_list.append(file)
+		print('Advertising my RFC list...')
+		for rfc in rfc_list:
+			self.addRfcToServer(clientSocket, 0, 0, rfc)				
+
+	def addRfcToServer(self, client_socket, menu_option_selected, rfc, file):
+		if menu_option_selected != 0:
+			message = ''
+			while True :
+				RFC = str(input("RFC Number = "))
+				title = raw_input("RFC title = ")
+				
+				filename = 'RFC' + str(RFC) + ', ' + title + '.pdf'
+				#if os.path.isfile(filename) :
+				flag = False
+				for file in os.listdir("."):
+					#print 'file = ' + file
+					#print 'filename = '+ filename
+					if file == filename:
+						flag = True
+						break
+				if flag == True:
+					message = self.createPacket('ADD', str(RFC), filename)
+					client_socket.send(bytes(message.encode('UTF-8')))	
+					server_response = client_socket.recv(2048) 
+					server_message = server_response.decode('UTF-8')
+					print('\n' + server_message + '\n')
+					break
+					
+				print(filename + ' does not exist. Try again')
+				option = raw_input('I do not want to add! (Y/N)')
+				if option == 'Y' :
+					break
+			
+		else:
+			#message = self.createPacket('CURR_ADD', rfc[3:len(rfc) - 4], file)
+			rfcString = file.split(",")[0]
+			rfcNum = rfcString[3:]
+			message = self.createPacket('CURR_ADD', rfcNum, file)
+			client_socket.send(bytes(message.encode('UTF-8')))	
+			server_response = client_socket.recv(2048) 
+			server_message = server_response.decode('UTF-8')
+			print('\n' + server_message + '\n')
+
+	def lookUpRfc(self, client_socket):
+		message = self.createPacket('LOOKUP', 0, 0)
+		client_socket.send(bytes(message.encode('UTF-8')))	
+		server_response = client_socket.recv(1024) 
+		server_message = server_response.decode('UTF-8')
+		rfc_peer_list = self.parseMessage(server_message)
+		print('\n' + rfc_peer_list[0])
+		if '200 OK' not in rfc_peer_list[0]:
+			print('Request was not served successfully')
+		else:
+			print('Select a peer from the below peer list to download RFC.')
+			print('Select Quit download option otherwise')			
+			for iterator in range(1, len(rfc_peer_list) - 1):
+				peerDetails = rfc_peer_list[iterator].split('<c>')  # change <c> 
+				print("%d Host:%s\tPort:%s" % (iterator, peerDetails[2], peerDetails[3]))
+			print(str(iterator + 1) + ". Quit Download Option")
+			peer_selected_for_download = input("option = ")
+			while int(peer_selected_for_download) <= 0 or int(peer_selected_for_download) > len(rfc_peer_list) + 1 :
+					peer_selected_for_download = input("Enter valid Integer option = ") 
+
+			if int(peer_selected_for_download) == iterator + 1:
 					return
 			else:
-				self.downloadRFC(peerList[int(option)])	    
+				self.downloadFromPeer(rfc_peer_list[int(peer_selected_for_download)])	    
 				return
-		
-		
-		
-	def downloadRFC(self, pList):
-		selectedHost = pList.split('<c>')
-		#extracting the RFC Number, Host IP address, Host Port
-		rfc = selectedHost[0]
-		host = selectedHost[2]
-		port = int(selectedHost[4])   													#have to change this port number location
-		
-		#opengin a socket to download from the selected peer
-		downloadSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)               
-		downloadSocket.connect((host,port))
-		
-		#Sending a GET Request to the Peer for the required RFC
-		sendMessage = self.formMessage('GET', rfc)
-		downloadSocket.send(bytes(sendMessage.encode('UTF-8')))	
-		
-		#Receiving the status message + DATA from the peer
-		data = downloadSocket.recv(2048) 
-		decodedData = data.decode('UTF-8')
-		print('\n'+decodedData+'\n')
-		
-		#If the status is OK then a file is created and /
-		#contents are downloaded and the download socket is closed.
-		if '200 OK' in decodedData:
-			filename = 'RFC'+rfc+'.pdf'
-			# f = open(filename,'w')		
-			# data = ''
-			# while data != bytes('','UTF-8'):
-				# data = downloadSocket.recv(2048) 
-				# f.write(data.decode('UTF-8'))
-			# f.close()
-			executable = 'python gbnServerCopy.py' + ' ' + str(port) + ' ' + str(port1) + ' ' + filename + ' ' + str(self.prob)
-			os.system(executable)			
-		downloadSocket.close()
+	def listIndexRequest(self, client_socket):
+		sendMessage = self.createPacket('LIST', None, 0)
+		client_socket.send(bytes(sendMessage.encode('UTF-8')))	
+		server_response = client_socket.recv(1024) 
+		server_message = server_response.decode('UTF-8')
+		self.printIndex(server_message)
 	
-	
-	
-	#Prints the Index received from the server.
-	def printList(self,rfcList):
-		masterList = rfcList.split('\n')
-		print('\n'+masterList[0]+'\n')
-		if '200 OK' in masterList[0]:
-			for i in range(1,len(masterList)-1):
-					r = masterList[i].split('<c>')
-					print(str(i)+'.\t'+r[0]+'\t'+r[1]+'\t'+r[2]+'\t'+r[3]+'\n')
-	
-	
-	
-	#Sends LIST ALL Message to the server to receive the entire LIST
-	def wholeIndexRequest(self, cliSoc):
-		sendMessage = self.formMessage('LIST',None)
-		#cliSoc.send(bytes(sendMessage,'UTF-8'))	
-		cliSoc.send(bytes(sendMessage.encode('UTF-8')))	
-		data = cliSoc.recv(1024) 
-		decodedData = data.decode('UTF-8')
-		self.printList(decodedData);
-		
-		
-#Thread to provide the download service to other peers in the network.
-class uploader(threading.Thread):
-	def __init__(self, newTuple,n,mss,uport):
-		threading.Thread.__init__(self)
-		self.client = newTuple[0]
-		self.address = newTuple[1]
-		self.n = n
-		self.mss = mss
-		self.uport = uport
-		
-		
-	def parseMsg(self, decodedMsg):
-		m1 = decodedMsg.split("\n")
-		m2 = []
-		for l in m1:
-			m2.append(str(l).split(" "))		
-		return m2
+	def printIndex(self, rfcIndex):
+		rfcList = rfcIndex.split('\n')
+		print('\n' + rfcList[0] + '\n')
+		if '200 OK' not in rfcList[0]:
+			print('Request for RFC index was not completed successfully.')
+		else:
+			for i in range(1, len(rfcList) - 1):
+				rfc = rfcList[i].split('<c>')
+				print(str(i) + '.\t' + rfc[0] + '\t' + rfc[1] + '\t' + rfc[2] + '\t' + rfc[3] + '\n')
+				#print(str(i) + '.\t' + rfc[0] + '\t' + rfc[1] + '\t' + rfc[2] + '\n')
 
-		
-		
-	#Response to other Clients requesting download
-	def buildResponse(self, stat, fileName):
-		sp = ' ' 
-		end = '\n'
-		OS = 'OS:'+sp+platform.platform()+end
-		currTime = 'Date:'+sp+time.asctime()+end
-		if stat != '200 OK':
-			lstModTme = 'Last-Modified:'+end
-			contentLen = 'Content-Length:'+end
+	
+	def downloadFromPeer(self, peerDetails):
+		peerDetailsList = peerDetails.split('<c>')
+		rfc = peerDetailsList[0]
+		title = peerDetailsList[1]
+		peer_hostname = peerDetailsList[2]
+		peer_upload_port = int(peerDetailsList[4])  # have to change this port number location
+		peerSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)               
+		peerSocket.connect((peer_hostname, peer_upload_port))
+		filename = 'RFC' + rfc + ', ' + title + '.pdf'
+		sendMessage = self.createPacket('GET', rfc, filename)
+		peerSocket.send(bytes(sendMessage.encode('UTF-8')))	
+
+		data = peerSocket.recv(2048) 
+		decodedData = data.decode('UTF-8')
+		print('\n' + decodedData + '\n')
+		if '200 OK' in decodedData:
+			rfcFile = 'RFC' + rfc + ',' + title + '.pdf'
+			executable = 'python gbnClient.py' + ' ' + str(peer_upload_port) + ' ' + str(port1) + ' ' + '"' + rfcFile + '"' + ' ' + str(self.p)
+			os.system(executable)			
 		else:
-			seconds = os.path.getmtime(fileName)
-			lstModTme = 'Last-Modified:'+sp+time.strftime('%Y-%m-%d %H:%M', time.localtime(seconds))+end
-			contentLen = 'Content-Length:'+str(os.path.getsize(fileName))+end
-			
-		contentType = 'Content-Type: text/plain'+end
-		resMsg = 'P2P-CI/1.0'+sp+stat+end+currTime+OS+lstModTme+contentLen+contentType
-		return resMsg
+			print('Error while connecting to peer. Try again.')
 		
-		
-		
-	#Response to other Clients requesting download
-	def respondToRequest(self,message):
-		global port1
-		method = message[0][0]
-		version = message[0][3]
-		file = 'RFC'+message[0][2]+'.pdf'				
-		status = ''
-		if method != 'GET':								#Only GET Request is supported
-			status = '400 Bad Request'			
-		elif version != 'P2P-CI/1.0':					#Only P2P-CI/1.0 is supported
-			status = '505 P2P-CI Version Not Supported' 
-		elif not os.path.exists(file):					#The file is checked in the current working directory	
-			status = '404 Not Found'
-		else:
-			status = '200 OK'
-			
-		responseMsg = self.buildResponse(status, file)	#Response to the other peer requesting a file download
-		self.client.send(bytes(responseMsg.encode('UTF-8')))
+		peerSocket.close()
+				
+	def run(self):
+		global serverHost,serverPort
+		client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+		client_socket.connect((serverHost, serverPort))
+
+		print('Select among the following menu options')
+		print('1. Advertise existent RFCs to server')
+		print('2. Add RFCs later. Take me to Main Menu')
+		initial_menu_option = int(input('Option = '))
+		if initial_menu_option == 1:
+			self.advertiseRfc(client_socket)
+		self.mainMenu(client_socket)
+
+class p2p(threading.Thread):
+	def __init__(self, client_details, window_size, mss, upload_port):
+		threading.Thread.__init__(self)
+		self.client = client_details[0]
+		self.address = client_details[1]
+		self.n = window_size
+		self.mss = mss
+		self.upload_port = upload_port
+	def parseMessage(self, message):
+		messageList = message.split("\n")
+		messageDetailsList = []
+		for msg in messageList:
+			messageDetailsList.append(str(msg).split(" "))		
+		return messageDetailsList
+
+	def prepareResponsePacket(self, status, rfcFile):
+
+		OS = 'OS:' + ' ' + platform.platform() + '\n'
+		currentTime = 'Date:' + ' ' + time.asctime() + '\n'
 		if status == '200 OK':
-			# f = open(file,'r')
-			# for line in f:
-				# self.client.send(bytes(line.encode('UTF-8')))
-			# f.close()
-			host,port = self.client.getpeername()
-			port1 = port
-			print(host+''+str(port))
-			#executable = 'python gbnClientCopy.py ' + str(host) + ' ' + str(port) + ' ' + file + ' ' + str(self.n) + ' ' + str(self.mss)+ ' '+ str(self.uport)
-			executable = 'python gbnClientCopy.py ' + str(host) + ' ' + str(7777) + ' ' + file + ' ' + str(self.n) + ' ' + str(self.mss)+ ' '+ str(self.uport)
-			os.system(executable)
-		self.client.close()		
-			
-			
+			seconds = os.path.getmtime(rfcFile)
+			lastModifiedTime = 'Last-Modified:' + ' '+ time.strftime('%Y-%m-%d %H:%M', time.localtime(seconds)) + '\n'
+			contentLength = 'Content-Length:' + str(os.path.getsize(rfcFile)) + '\n'
+		else:
+			lastModifiedTime = 'Last-Modified:' + '\n'
+			contentLength = 'Content-Length:' + '\n'
+		contentType = 'Content-Type: text/plain' + '\n'
+		response = 'P2P-CI/1.0' + ' ' + status + '\n' + currentTime + OS + lastModifiedTime + contentLength + contentType
+		return response
+	def handlePeerRequest(self, peerMessage):
+		global port1
+		request_method = peerMessage[0][0]
+		version = peerMessage[0][3]
+		flag = False
+		for file in os.listdir("."):
+			if file.startswith('RFC' + str(peerMessage[0][2])) :
+				rfcFile = file
+				flag = True
+		#rfcFile = 'RFC' + peerMessage[0][2] + '.pdf'				
+		response_status = ''
+		if request_method != 'GET':  # Only GET Request is supported
+			response_status = '400 Bad Request'	
+		elif not os.path.exists(rfcFile) or flag == False:  # The file is checked in the current working directory	
+			response_status = '404 Not Found'		
+		elif version != 'P2P-CI/1.0':  # Only P2P-CI/1.0 is supported
+			response_status = '505 P2P-CI Version Not Supported' 
+		else:
+			response_status = '200 OK'
+		responseMsg = self.prepareResponsePacket(response_status, rfcFile)  # Response to the other peer requesting a file download
+		self.client.send(bytes(responseMsg.encode('UTF-8')))
+		if response_status == '200 OK':
+			peerHostName, peerPort = self.client.getpeername()
+			port1 = peerPort
+			print(peerHostName + '' + str(peerPort))
+			executable = 'python gbnServer.py ' + str(peerHostName) + ' ' + str(7777) + ' ' + '"' + rfcFile + '"' + ' ' + str(self.n) + ' ' + str(self.mss) + ' ' + str(self.upload_port)
+			print(str(executable))
+			pro = subprocess.Popen(executable, shell=True)
+		self.client.close()	
 			
 	def run(self):
-		receivedMsg = self.client.recv(1024)
-		decodedMsg = receivedMsg.decode('UTF-8')
-		print(decodedMsg)
-		actualMsg = self.parseMsg(decodedMsg)
-		self.respondToRequest(actualMsg)
+		receivedMessage = self.client.recv(1024)
+		decodedMessage = receivedMessage.decode('UTF-8')
+		print(decodedMessage)
+		data = self.parseMessage(decodedMessage)
+		self.handlePeerRequest(data)
 		
-		
-		
-#Class to handle uploading			
 class uploadHandler(threading.Thread):		
-	def __init__(self, uport,n,mss):
+	def __init__(self, uploadPort, window_size, mss):
 		threading.Thread.__init__(self)
-		self.uploaderSoc = None
-		self.port = uport
-		self.n = n
+		self.myUploadSocket = None
+		self.port = uploadPort
+		self.n = window_size
 		self.mss = mss
 		self.start()	
-	
-	
 	def run(self):
-		self.uploaderSoc = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-		#host = socket.gethostname()
-		self.uploaderSoc.bind(('',self.port)) 
-		self.uploaderSoc.listen(5)
+		self.myUploadSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+		self.myUploadSocket.bind(('', self.port)) 
+		self.myUploadSocket.listen(5)
 		while True:
 			try:
-				u =  uploader(self.uploaderSoc.accept(),self.n,self.mss, self.port)
+				u = p2p(self.myUploadSocket.accept(), self.n, self.mss, self.port)
 				u.start()
 			except OSError:
-				print('Client closed its connection')
+				print('Peer exited the network')
 				break
-				
-				
-def main():	
-	uploaderPort = int(input("Upload Port Number = ") ) #Port to Upload
-	uploaderPort = 5555
-	#n = input("N = ")  								# Window size
-	n = 4
-	#mss = input("MSS =")							# Max segment size
-	mss = 150
-	#prob = input("Loss probability = ")				# Loss probability 
-	prob = 0.4
-	reqClient = requestor(uploaderPort, prob) 				#Thread to communicate with the server
-	uploadToClient = uploadHandler(uploaderPort,n,mss)	#Thread handling upload process
-	while reqClient.isAlive():
-		pass
-	uploadToClient.uploaderSoc.close() 					#Closing the client 
 
-	
+def main():	
+	uploaderPort = int(input("Upload port : "))
+	mss = int(input("Maximum Segment Size (Enter value less than 1200) : "))
+	n = int(input("Window size for Go Back N transmission : "))
+	p = float(input("Probability of packet loss in the file server"))
+	peerToServer = p2s(uploaderPort, p)  # Thread to communicate with the server
+	peerToPeer = uploadHandler(uploaderPort, n, mss)  # Thread handling upload process
+	while peerToServer.isAlive():
+		pass
+	peerToPeer.myUploadSocket.close()  # Closing the client 
+
 if __name__ == '__main__':	
 	main()
